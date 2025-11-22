@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"auction/internal/middleware"
+	"auction/internal/models"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -19,98 +21,68 @@ func NewBidHandler(db *sql.DB) *BidHandler {
 
 // CreateBid - создание ставки
 func (h *BidHandler) CreateBid(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method is not supported", http.StatusMethodNotAllowed)
+	user := middleware.GetUserFromContext(r.Context())
+	if user == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	var req struct {
-		LotID  int     `json:"lot_id"`
-		UserID int     `json:"user_id"` //Добавить JWT
-		Amount float64 `json:"amount"`
-	}
+	var bid models.Bid
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid data", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&bid); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Проверяем, существует ли лот и активен ли он
+	bid.UserID = user.ID
+
 	var currentPrice float64
-	var status string
 	err := h.db.QueryRow(
-		"SELECT current_price, status FROM lots WHERE id = $1",
-		req.LotID,
-	).Scan(&currentPrice, &status)
-
+		"SELECT current_price FROM lots WHERE id = $1",
+		bid.LotID).Scan(&currentPrice)
+	if err == sql.ErrNoRows {
+		http.Error(w, "lot not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
 		http.Error(w, "lot not found", http.StatusNotFound)
 		return
 	}
 
-	if status != "active" {
-		http.Error(w, "lot is not active", http.StatusBadRequest)
+	/*if bid.Amount <= currentPrice {
+		http.Error(w, "Bid must be higher than current price", http.StatusBadRequest)
 		return
-	}
-
-	// Проверяем, что ставка выше текущей
-	if req.Amount <= currentPrice {
-		http.Error(w, "the bid must be higher than the current price", http.StatusBadRequest)
-		return
-	}
-
-	// Начинаем транзакцию
-	tx, err := h.db.Begin()
-	if err != nil {
-		http.Error(w, "error", http.StatusInternalServerError)
-		return
-	}
-
-	// Создаем ставку
-	_, err = tx.Exec(
-		"INSERT INTO bids (lot_id, user_id, amount, created_at) VALUES ($1, $2, $3, $4)",
-		req.LotID, req.UserID, req.Amount, time.Now(),
-	)
+	}*/
+	var bidID int
+	err = h.db.QueryRow(`INSERT INTO bids (lot_id, user_id, amount) VALUES ($1, $2, $3) RETURNING id`,
+		bid.LotID,
+		bid.UserID,
+		bid.Amount).Scan(&bidID)
 
 	if err != nil {
-		tx.Rollback()
-		http.Error(w, "error creating bid", http.StatusInternalServerError)
+		http.Error(w, "error created bid", http.StatusNotFound)
 		return
 	}
 
-	// Обновляем текущую цену лота
-	_, err = tx.Exec(
+	_, err = h.db.Exec(
 		"UPDATE lots SET current_price = $1 WHERE id = $2",
-		req.Amount, req.LotID,
-	)
-
+		bid.Amount, bid.LotID)
 	if err != nil {
-		tx.Rollback()
-		http.Error(w, "price update error", http.StatusInternalServerError)
+		http.Error(w, "error updated bid", http.StatusNotFound)
 		return
 	}
 
-	err = tx.Commit()
-	if err != nil {
-		http.Error(w, "error", http.StatusInternalServerError)
-		return
-	}
-
+	bid.ID = bidID
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "bed successfully placed",
-	})
+	json.NewEncoder(w).Encode(bid)
 }
 
-// GetMyBids - получение ставок текущего пользователя
 func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// В реальном приложении userID должен браться из JWT токена или сессии
-	// Сейчас будем использовать query parameter, но это НЕБЕЗОПАСНО - только для тестирования!
 	userIDStr := r.URL.Query().Get("user_id")
 	if userIDStr == "" {
 		http.Error(w, "Не указан user_id", http.StatusBadRequest)
@@ -174,7 +146,7 @@ func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
 			"amount":        bid.Amount,
 			"created_at":    bid.CreatedAt,
 			"current_price": bid.CurrentPrice,
-			"bid_status":    bid.BidStatus, // "winning" - лидируете, "outbid" - вас перебили
+			"bid_status":    bid.BidStatus, //
 		})
 	}
 

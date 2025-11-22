@@ -1,111 +1,114 @@
 package handlers
 
 import (
+	"auction/internal/models"
+	"auction/internal/pkg"
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
-	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
-	DB *sql.DB
+	db *sql.DB
 }
 
 func NewAuthHandler(db *sql.DB) *AuthHandler {
-	return &AuthHandler{DB: db}
+	return &AuthHandler{db: db}
 }
 
-// Register - регистрация пользователя
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not found", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
 
+	var req models.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Хеширование пароля
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	var existingEmail string
+	err := h.db.QueryRow("SELECT email FROM users WHERE email = $1", req.Email).Scan(&existingEmail)
+	if err != sql.ErrNoRows {
+		http.Error(w, "Email already exists", http.StatusConflict)
+		return
+	}
+
+	hashedPassword, err := pkg.HashPassword(req.Password)
 	if err != nil {
+		http.Error(w, "failed to process password", http.StatusInternalServerError)
+		return
+	}
+
+	var userID int
+	err = h.db.QueryRow("INSERT INTO users(username, email, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING id",
+		req.Username,
+		req.Email,
+		hashedPassword,
+		"user").Scan(&userID)
+
+	if err != nil {
+		log.Printf("Database INSERT error: %v", err)
 		http.Error(w, "error", http.StatusInternalServerError)
 		return
 	}
 
-	// Сохранение в базу данных
-	_, err = h.DB.Exec(
-		"INSERT INTO users (username, email, password_hash, created_at) VALUES ($1, $2, $3, $4)",
-		req.Username, req.Email, string(hashedPassword), time.Now(),
-	)
+	user := models.User{
+		ID:       userID,
+		Username: req.Username,
+		Email:    req.Email,
+		Role:     "user",
+	}
 
+	token, err := pkg.GenerateToken(user.ID, user.Username, user.Email, user.Role)
 	if err != nil {
-		http.Error(w, "user already exists", http.StatusConflict)
+		http.Error(w, "error generating token", http.StatusInternalServerError)
 		return
+	}
+
+	response := models.AuthRequest{
+		Token: token,
+		User:  user,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "user registered successfully",
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
-// Login - вход в систему
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method is not supported", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
+
+	var req models.LoginRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid data", http.StatusBadRequest)
+		log.Printf("JSON decode error: %v", err)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Поиск пользователя в базе
-	var userID int
-	var storedPassword string
-	err := h.DB.QueryRow(
-		"SELECT id, password_hash FROM users WHERE username = $1",
+	var user models.User
+	var hashedPassword string
+	err := h.db.QueryRow(
+		"SELECT id, username, email, password_hash, role FROM users WHERE username = $1",
 		req.Username,
-	).Scan(&userID, &storedPassword)
+	).Scan(&user.ID,
+		&user.Username,
+		&user.Email,
+		&hashedPassword,
+		&user.Role)
 
+	if !pkg.CheckPasswordHash(req.Password, hashedPassword) {
+		log.Printf("Password mismatch for user: %v", err)
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	token, err := pkg.GenerateToken(user.ID, user.Username, user.Email, user.Role)
 	if err != nil {
-		http.Error(w, "incorrect login or password", http.StatusUnauthorized)
+		http.Error(w, "error generating token", http.StatusInternalServerError)
 		return
 	}
-
-	// Проверка пароля
-	if err := bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(req.Password)); err != nil {
-		http.Error(w, "incorrect login or password", http.StatusUnauthorized)
-		return
+	response := models.AuthRequest{
+		Token: token,
+		User:  user,
 	}
-
-	// Здесь можно добавить JWT токен или сессию
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":  "successfully logged in",
-		"user_id":  userID,
-		"username": req.Username,
-	})
-}
-
-func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "successful exit",
-	})
+	json.NewEncoder(w).Encode(response)
 }

@@ -14,7 +14,7 @@ type Lot struct {
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 	EndTime      string    `json:"end_time"`
-	UserID       string    `json:"user_id"`
+	UserID       int       `json:"user_id"`
 }
 
 type CreateLotRequest struct {
