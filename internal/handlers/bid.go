@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -22,19 +21,22 @@ func NewBidHandler(db *sql.DB) *BidHandler {
 // CreateBid - создание ставки
 func (h *BidHandler) CreateBid(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUserFromContext(r.Context())
+
 	if user == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	var bid models.Bid
+	if user.Role != "user" {
+		http.Error(w, "no access", http.StatusUnauthorized)
+		return
+	}
+	var bid models.PlaceBid
 
 	if err := json.NewDecoder(r.Body).Decode(&bid); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-
-	bid.UserID = user.ID
 
 	var currentPrice float64
 	err := h.db.QueryRow(
@@ -56,10 +58,11 @@ func (h *BidHandler) CreateBid(w http.ResponseWriter, r *http.Request) {
 	var bidID int
 	err = h.db.QueryRow(`INSERT INTO bids (lot_id, user_id, amount) VALUES ($1, $2, $3) RETURNING id`,
 		bid.LotID,
-		bid.UserID,
+		user.ID,
 		bid.Amount).Scan(&bidID)
 
 	if err != nil {
+		log.Printf("error inserting bid: %v", err)
 		http.Error(w, "error created bid", http.StatusNotFound)
 		return
 	}
@@ -78,22 +81,16 @@ func (h *BidHandler) CreateBid(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+	user := middleware.GetUserFromContext(r.Context())
+	if user == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}
+	if user.Role != "user" {
+		http.Error(w, "no access", http.StatusUnauthorized)
 		return
 	}
 
-	userIDStr := r.URL.Query().Get("user_id")
-	if userIDStr == "" {
-		http.Error(w, "Не указан user_id", http.StatusBadRequest)
-		return
-	}
-
-	userID, err := strconv.Atoi(userIDStr)
-	if err != nil {
-		http.Error(w, "Неверный формат user_id", http.StatusBadRequest)
-		return
-	}
+	userID := user.ID
 
 	rows, err := h.db.Query(`
         SELECT
@@ -103,10 +100,16 @@ func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
             b.amount,
             b.created_at,
             l.current_price,
+            l.end_time,
             CASE
-                WHEN b.amount = l.current_price THEN 'winning'
-                ELSE 'outbid'
-            END as bid_status
+                WHEN l.end_time < NOW() THEN
+                CASE
+                	WHEN b.amount = l.current_price THEN 'won'
+                	ELSE 'lost'
+            END 
+        WHEN b.amount = l.current_price THEN 'winning'
+        ELSE 'lost'
+        END as bid_status
         FROM bids b
         JOIN lots l ON b.lot_id = l.id
         WHERE b.user_id = $1
@@ -114,8 +117,7 @@ func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
     `, userID)
 
 	if err != nil {
-		log.Printf("Ошибка базы данных: %v", err)
-		http.Error(w, "Ошибка базы данных", http.StatusInternalServerError)
+		http.Error(w, "error database", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -129,11 +131,12 @@ func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
 			Amount       float64   `json:"amount"`
 			CreatedAt    time.Time `json:"created_at"`
 			CurrentPrice float64   `json:"current_price"`
+			EndTime      time.Time `json:"end_time"`
 			BidStatus    string    `json:"bid_status"`
 		}
 
 		err := rows.Scan(&bid.ID, &bid.LotID, &bid.LotTitle, &bid.Amount,
-			&bid.CreatedAt, &bid.CurrentPrice, &bid.BidStatus)
+			&bid.CreatedAt, &bid.CurrentPrice, &bid.EndTime, &bid.BidStatus)
 		if err != nil {
 			log.Printf("Ошибка сканирования ставки: %v", err)
 			continue
@@ -146,7 +149,8 @@ func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
 			"amount":        bid.Amount,
 			"created_at":    bid.CreatedAt,
 			"current_price": bid.CurrentPrice,
-			"bid_status":    bid.BidStatus, //
+			"end_time":      bid.EndTime,
+			"bid_status":    bid.BidStatus,
 		})
 	}
 
@@ -162,4 +166,13 @@ func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
 		"bids":    bids,
 		"count":   len(bids),
 	})
+}
+
+func (h *BidHandler) checkUserRole(userID int) (string, error) {
+	var role string
+	err := h.db.QueryRow("SELECT role FROM users WHERE id = $1", userID).Scan(&role)
+	if err != nil {
+		return "", err
+	}
+	return role, nil
 }

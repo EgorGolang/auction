@@ -12,6 +12,12 @@ type Bid struct {
 
 type PlaceBidRequest struct {
 	LotID  int `json:"lot_id"`
-	UserID int `json:"user_id"`
 	Amount int `json:"amount"`
+}
+
+type PlaceBid struct {
+	ID        int       `json:"id"`
+	LotID     int       `json:"lot_id"`
+	Amount    int       `json:"amount"`
+	CreatedAt time.Time `json:"created_at"`
 }

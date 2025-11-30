@@ -17,12 +17,22 @@ type RegisterRequest struct {
 	Password string `json:"password" validate:"required,min=8"`
 }
 
-type LoginRequest struct {
-	Username string `json:"username" validate:"required,username"`
-	Password string `json:"password" validate:"required"`
-}
-
 type AuthRequest struct {
 	Token string `json:"token"`
 	User  User   `json:"user"`
+}
+
+type SignInRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+type TokenPairResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+type AuthResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
 }

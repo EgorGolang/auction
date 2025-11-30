@@ -10,11 +10,9 @@ type Lot struct {
 	Description  string    `json:"description"`
 	StartPrice   int       `json:"start_price"`
 	CurrentPrice int       `json:"current_price"`
-	Step         int       `json:"step"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 	EndTime      string    `json:"end_time"`
-	UserID       int       `json:"user_id"`
 }
 
 type CreateLotRequest struct {

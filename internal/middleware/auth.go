@@ -70,31 +70,6 @@ func AuthMiddleware(h http.Handler) http.Handler {
 	})
 }
 
-func RequireAuth(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := r.Context().Value(UserKey)
-		if user == nil {
-			log.Println("RequireAuth user not found")
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), UserKey, user)))
-	})
-}
-
-func RequireRole(role string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, ok := r.Context().Value(UserKey).(*models.User)
-			if !ok || user.Role != role {
-				http.Error(w, "Insufficient permissions", http.StatusForbidden)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 func GetUserFromContext(ctx context.Context) *models.User {
 	user, ok := ctx.Value(UserKey).(*models.User)
 	if !ok {

@@ -55,6 +55,12 @@ func (h *LotHandler) CreateLot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	role, err := h.checkUserRole(user.ID)
+	if role != "user" {
+		http.Error(w, "no access", http.StatusUnauthorized)
+		return
+	}
+
 	var lot models.Lot
 	if err := json.NewDecoder(r.Body).Decode(&lot); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -133,4 +139,13 @@ func (h *LotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *LotHandler) checkUserRole(userID int) (string, error) {
+	var role string
+	err := h.db.QueryRow("SELECT role FROM users WHERE id = $1", userID).Scan(&role)
+	if err != nil {
+		return "", err
+	}
+	return role, nil
 }

@@ -5,6 +5,7 @@ import (
 	"auction/internal/pkg"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 )
@@ -58,24 +59,29 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Role:     "user",
 	}
 
-	token, err := pkg.GenerateToken(user.ID, user.Username, user.Email, user.Role)
+	accessToken, refreshToken, err := h.generateTokenPair(user)
 	if err != nil {
 		http.Error(w, "error generating token", http.StatusInternalServerError)
 		return
 	}
 
-	response := models.AuthRequest{
-		Token: token,
-		User:  user,
+	response := models.AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
+type LoginRequest struct {
+	Username string `json:"username" validate:"required"`
+	Password string `json:"password" validate:"required"`
+}
+
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
-	var req models.LoginRequest
+	var req LoginRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("JSON decode error: %v", err)
@@ -100,15 +106,75 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := pkg.GenerateToken(user.ID, user.Username, user.Email, user.Role)
+	accessToken, refreshToken, err := h.generateTokenPair(user)
 	if err != nil {
 		http.Error(w, "error generating token", http.StatusInternalServerError)
 		return
 	}
-	response := models.AuthRequest{
-		Token: token,
-		User:  user,
+
+	response := models.AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefreshToken string `json:"refresh_token" validate:"required"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	claims, err := pkg.ValidateToken(req.RefreshToken)
+	if err != nil {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+	if claims.TokenType != "refresh" {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	var user models.User
+	err = h.db.QueryRow("SELECT id, username, email, role FROM users WHERE id = $1").Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.Role)
+
+	if err != nil {
+		log.Printf("Database INSERT error: %v", err)
+		http.Error(w, "error", http.StatusInternalServerError)
+		return
+	}
+
+	accessToken, refreshToken, err := h.generateTokenPair(user)
+	if err != nil {
+		http.Error(w, "error generating token", http.StatusInternalServerError)
+		return
+	}
+
+	response := models.AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (h *AuthHandler) generateTokenPair(user models.User) (accessToken string, refreshToken string, err error) {
+	accessToken, err = pkg.GenerateToken(user.ID, user.Username, user.Email, user.Role, "access")
+	if err != nil {
+		return "", "", errors.New("error generating token")
+	}
+
+	refreshToken, err = pkg.GenerateToken(user.ID, user.Username, user.Email, user.Role, "refresh")
+	if err != nil {
+		return "", "", errors.New("error generating token")
+	}
+	return accessToken, refreshToken, nil
 }
