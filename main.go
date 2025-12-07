@@ -3,6 +3,8 @@ package main
 import (
 	"auction/internal/handlers"
 	"auction/internal/middleware"
+	"auction/internal/repository"
+	"auction/internal/service"
 	"database/sql"
 	"fmt"
 	"github.com/gorilla/mux"
@@ -26,16 +28,23 @@ func main() {
 	}
 	defer db.Close()
 
+	lotRepo := repository.NewPostgresLotRepository(db)
+	bidRepo := repository.NewPostgresBidRepository(db)
+	userRepo := repository.NewPostgresUserRepository(db)
+
+	lotService := service.NewLotService(lotRepo, userRepo)
+	bidService := service.NewBidService(bidRepo, lotRepo)
+
 	authHandler := handlers.NewAuthHandler(db)
-	lotHandler := handlers.NewLotHandler(db)
-	bidHandler := handlers.NewBidHandler(db)
+	lotHandler := handlers.NewLotHandler(db, lotService)
+	bidHandler := handlers.NewBidHandler(db, bidService)
 
 	r := mux.NewRouter()
 
 	r.HandleFunc("/api/register", authHandler.Register)
 	r.HandleFunc("/api/login", authHandler.Login)
 	r.HandleFunc("/api/lots", lotHandler.GetLots)
-	r.HandleFunc("/api/lot", lotHandler.GetLot)
+	r.HandleFunc("/api/lot", lotHandler.GetLotByID)
 
 	auth := r.PathPrefix("/auth").Subrouter()
 	auth.Use(middleware.AuthMiddleware)
@@ -44,7 +53,7 @@ func main() {
 	auth.HandleFunc("/bids/create", bidHandler.CreateBid)
 	auth.HandleFunc("/bids/my", bidHandler.GetMyBids)
 
-	r.HandleFunc("/api/lot/delete", lotHandler.DeleteLot)
+	auth.HandleFunc("/lot/delete", lotHandler.DeleteLot)
 
 	log.Println("The server is running at :8081")
 	log.Fatal(http.ListenAndServe(":8081", r))
