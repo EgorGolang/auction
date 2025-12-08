@@ -1,0 +1,416 @@
+definitions:
+  models.AuthResponse:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+    type: object
+  models.Bid:
+    properties:
+      amount:
+        type: integer
+      created_at:
+        type: string
+      id:
+        type: integer
+      lot_id:
+        type: integer
+      user_id:
+        type: integer
+    type: object
+  models.BidResponse:
+    properties:
+      amount:
+        type: integer
+      id:
+        type: integer
+      lot_id:
+        type: integer
+      user_id:
+        type: integer
+    type: object
+  models.CreateLotResponse:
+    properties:
+      lot_id:
+        type: integer
+      message:
+        type: string
+    type: object
+  models.ErrorResponse:
+    properties:
+      error:
+        example: error message
+        type: string
+    type: object
+  models.Lot:
+    properties:
+      description:
+        type: string
+      end_time:
+        type: string
+      start_price:
+        type: integer
+      title:
+        type: string
+    type: object
+  models.LotResponse:
+    properties:
+      created_at:
+        type: string
+      current_price:
+        type: integer
+      description:
+        type: string
+      end_time:
+        type: string
+      id:
+        type: integer
+      start_price:
+        type: integer
+      title:
+        type: string
+      user_id:
+        type: integer
+    type: object
+  models.PlaceBidRequest:
+    properties:
+      amount:
+        type: integer
+      lot_id:
+        type: integer
+    type: object
+  models.SignInRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  models.UserBidsResponse:
+    properties:
+      bids:
+        items:
+          $ref: '#/definitions/models.Bid'
+        type: array
+      count:
+        type: integer
+      user_id:
+        type: integer
+    type: object
+info:
+  contact:
+    email: test@test.com
+    name: AuctionInfo Service
+    url: http://test.com
+  title: AuctionInfo
+paths:
+  /api/login:
+    post:
+      consumes:
+      - application/json
+      description: Авторизует пользователя и возвращает токены
+      parameters:
+      - description: Данные для авторизации
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SignInRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.AuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: рАвторизация пользователя
+      tags:
+      - auth
+  /api/lot:
+    get:
+      consumes:
+      - application/json
+      description: Возвращает информацию о конкретном лоте по его ID
+      parameters:
+      - description: ID лота
+        in: query
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Информация о лоте
+          schema:
+            $ref: '#/definitions/models.LotResponse'
+        "400":
+          description: Неверный ID
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Лот не найден
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Внутренняя ошибка сервера
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Получение лота по ID
+      tags:
+      - lots
+  /api/lots:
+    get:
+      consumes:
+      - application/json
+      description: Возвращает список активных лотов
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Получение списка лотов
+      tags:
+      - lots
+  /api/register:
+    post:
+      consumes:
+      - application/json
+      description: Создание нового пользователя
+      parameters:
+      - description: Данные для регистрации
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.SignInRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.AuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: аРегистрация нового пользователя
+      tags:
+      - auth
+  /auth/bids/create:
+    post:
+      consumes:
+      - application/json
+      description: Позволяет пользователю сделать ставку на активный лот
+      parameters:
+      - description: Данные для создания ставки
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.PlaceBidRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Ставка успешно создана
+          schema:
+            $ref: '#/definitions/models.BidResponse'
+        "400":
+          description: Неверные данные запроса
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Не авторизован
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Доступ запрещен (не пользователь)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Лот не найден
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Нельзя делать ставку на собственный лот
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "422":
+          description: Ставка ниже текущей цены
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Внутренняя ошибка сервера
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создание ставки на лот
+      tags:
+      - bids
+  /auth/bids/my:
+    get:
+      consumes:
+      - application/json
+      description: Возвращает список всех ставок, сделанных текущим пользователем
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Список ставок пользователя
+          schema:
+            $ref: '#/definitions/models.UserBidsResponse'
+        "401":
+          description: Не авторизован
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Доступ запрещен (не пользователь)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Внутренняя ошибка сервера
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Получение всех ставок пользователя
+      tags:
+      - bids
+  /auth/lot/delete:
+    delete:
+      consumes:
+      - application/json
+      description: Удаляет лот по ID (только для администраторов)
+      parameters:
+      - description: ID лота для удаления
+        in: query
+        minimum: 1
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Лот успешно удален
+        "400":
+          description: Неверный ID или отсутствует ID
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Не авторизован
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Доступ запрещен (не администратор)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Лот не найден
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Внутренняя ошибка сервера
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Удаление лота
+      tags:
+      - lots
+  /auth/lots/create:
+    post:
+      consumes:
+      - application/json
+      description: Создает новый лот на аукционе
+      parameters:
+      - description: Данные лота
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.Lot'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.CreateLotResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создание нового лота
+      tags:
+      - lots
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

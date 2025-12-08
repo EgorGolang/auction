@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "auction/docs"
 	"auction/internal/handlers"
 	"auction/internal/middleware"
 	"auction/internal/repository"
@@ -10,11 +11,19 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	httpSwagger "github.com/swaggo/http-swagger"
 	"log"
 	"net/http"
 	"os"
 )
 
+// @title AuctionInfo
+// @contact.name AuctionInfo Service
+// @contact.url http://test.com
+// @contact.email test@test.com
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
 func main() {
 	godotenv.Load(".env")
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -40,6 +49,8 @@ func main() {
 	bidHandler := handlers.NewBidHandler(db, bidService)
 
 	r := mux.NewRouter()
+
+	r.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
 
 	r.HandleFunc("/api/register", authHandler.Register)
 	r.HandleFunc("/api/login", authHandler.Login)

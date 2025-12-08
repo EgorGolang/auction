@@ -1,178 +1,110 @@
 package handlers
 
 import (
+	"auction/internal/errs"
 	"auction/internal/middleware"
 	"auction/internal/models"
+	"auction/internal/service"
 	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
-	"time"
 )
 
 type BidHandler struct {
-	db *sql.DB
+	db         *sql.DB
+	bidService *service.BidService
 }
 
-func NewBidHandler(db *sql.DB) *BidHandler {
-	return &BidHandler{db: db}
+func NewBidHandler(db *sql.DB, bidService *service.BidService) *BidHandler {
+	return &BidHandler{
+		db:         db,
+		bidService: bidService,
+	}
 }
 
-// CreateBid - создание ставки
+// @Summary Создание ставки на лот
+// @Description Позволяет пользователю сделать ставку на активный лот
+// @Tags bids
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body models.PlaceBidRequest true "Данные для создания ставки"
+// @Success 201 {object} models.BidResponse "Ставка успешно создана"
+// @Failure 400 {object} models.ErrorResponse "Неверные данные запроса"
+// @Failure 401 {object} models.ErrorResponse "Не авторизован"
+// @Failure 403 {object} models.ErrorResponse "Доступ запрещен (не пользователь)"
+// @Failure 404 {object} models.ErrorResponse "Лот не найден"
+// @Failure 409 {object} models.ErrorResponse "Нельзя делать ставку на собственный лот"
+// @Failure 422 {object} models.ErrorResponse "Ставка ниже текущей цены"
+// @Failure 500 {object} models.ErrorResponse "Внутренняя ошибка сервера"
+// @Router /auth/bids/create [post]
 func (h *BidHandler) CreateBid(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUserFromContext(r.Context())
-
 	if user == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
 	if user.Role != "user" {
 		http.Error(w, "no access", http.StatusUnauthorized)
 		return
 	}
 	var bid models.PlaceBid
-
 	if err := json.NewDecoder(r.Body).Decode(&bid); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-
-	var currentPrice float64
-	err := h.db.QueryRow(
-		"SELECT current_price FROM lots WHERE id = $1",
-		bid.LotID).Scan(&currentPrice)
-	if err == sql.ErrNoRows {
-		http.Error(w, "lot not found", http.StatusNotFound)
-		return
-	}
+	bidResponse, err := h.bidService.CreateBid(r.Context(), user.ID, bid)
 	if err != nil {
-		http.Error(w, "lot not found", http.StatusNotFound)
+		switch err {
+		case errs.ErrFoundLot:
+			http.Error(w, "lot not found", http.StatusNotFound)
+		case errs.ErrBidTooLow:
+			http.Error(w, "lot too low", http.StatusBadRequest)
+		case errs.ErrCannotBidOnOwnLot:
+			http.Error(w, "cannot bid on own lot", http.StatusBadRequest)
+		default:
+			log.Printf("error creating bid: %v", err)
+			http.Error(w, "error creating bid", http.StatusInternalServerError)
+		}
 		return
 	}
-
-	/*if bid.Amount <= currentPrice {
-		http.Error(w, "Bid must be higher than current price", http.StatusBadRequest)
-		return
-	}*/
-	var bidID int
-	err = h.db.QueryRow(`INSERT INTO bids (lot_id, user_id, amount) VALUES ($1, $2, $3) RETURNING id`,
-		bid.LotID,
-		user.ID,
-		bid.Amount).Scan(&bidID)
-
-	if err != nil {
-		log.Printf("error inserting bid: %v", err)
-		http.Error(w, "error created bid", http.StatusNotFound)
-		return
-	}
-
-	_, err = h.db.Exec(
-		"UPDATE lots SET current_price = $1 WHERE id = $2",
-		bid.Amount, bid.LotID)
-	if err != nil {
-		http.Error(w, "error updated bid", http.StatusNotFound)
-		return
-	}
-
-	bid.ID = bidID
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(bid)
+	json.NewEncoder(w).Encode(bidResponse)
 }
 
+// @Summary Получение всех ставок пользователя
+// @Description Возвращает список всех ставок, сделанных текущим пользователем
+// @Tags bids
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} models.UserBidsResponse "Список ставок пользователя"
+// @Failure 401 {object} models.ErrorResponse "Не авторизован"
+// @Failure 403 {object} models.ErrorResponse "Доступ запрещен (не пользователь)"
+// @Failure 500 {object} models.ErrorResponse "Внутренняя ошибка сервера"
+// @Router /auth/bids/my [get]
 func (h *BidHandler) GetMyBids(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUserFromContext(r.Context())
 	if user == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 	if user.Role != "user" {
 		http.Error(w, "no access", http.StatusUnauthorized)
 		return
 	}
-
-	userID := user.ID
-
-	rows, err := h.db.Query(`
-        SELECT
-            b.id,
-            b.lot_id,
-            l.title as lot_title,
-            b.amount,
-            b.created_at,
-            l.current_price,
-            l.end_time,
-            CASE
-                WHEN l.end_time < NOW() THEN
-                CASE
-                	WHEN b.amount = l.current_price THEN 'won'
-                	ELSE 'lost'
-            END 
-        WHEN b.amount = l.current_price THEN 'winning'
-        ELSE 'lost'
-        END as bid_status
-        FROM bids b
-        JOIN lots l ON b.lot_id = l.id
-        WHERE b.user_id = $1
-        ORDER BY b.created_at DESC
-    `, userID)
-
+	bids, err := h.bidService.GetMyBids(r.Context(), user.ID)
 	if err != nil {
-		http.Error(w, "error database", http.StatusInternalServerError)
+		log.Printf("error getting bids: %v", err)
+		http.Error(w, "error getting bids", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
-
-	var bids []map[string]interface{}
-	for rows.Next() {
-		var bid struct {
-			ID           int       `json:"id"`
-			LotID        int       `json:"lot_id"`
-			LotTitle     string    `json:"lot_title"`
-			Amount       float64   `json:"amount"`
-			CreatedAt    time.Time `json:"created_at"`
-			CurrentPrice float64   `json:"current_price"`
-			EndTime      time.Time `json:"end_time"`
-			BidStatus    string    `json:"bid_status"`
-		}
-
-		err := rows.Scan(&bid.ID, &bid.LotID, &bid.LotTitle, &bid.Amount,
-			&bid.CreatedAt, &bid.CurrentPrice, &bid.EndTime, &bid.BidStatus)
-		if err != nil {
-			log.Printf("Ошибка сканирования ставки: %v", err)
-			continue
-		}
-
-		bids = append(bids, map[string]interface{}{
-			"id":            bid.ID,
-			"lot_id":        bid.LotID,
-			"lot_title":     bid.LotTitle,
-			"amount":        bid.Amount,
-			"created_at":    bid.CreatedAt,
-			"current_price": bid.CurrentPrice,
-			"end_time":      bid.EndTime,
-			"bid_status":    bid.BidStatus,
-		})
+	response := models.UserBidsResponse{
+		UserID: user.ID,
+		Bids:   bids,
+		Count:  len(bids),
 	}
-
-	if err = rows.Err(); err != nil {
-		log.Printf("Ошибка при итерации по ставкам: %v", err)
-		http.Error(w, "Ошибка обработки данных", http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"user_id": userID,
-		"bids":    bids,
-		"count":   len(bids),
-	})
-}
-
-func (h *BidHandler) checkUserRole(userID int) (string, error) {
-	var role string
-	err := h.db.QueryRow("SELECT role FROM users WHERE id = $1", userID).Scan(&role)
-	if err != nil {
-		return "", err
-	}
-	return role, nil
+	json.NewEncoder(w).Encode(response)
 }

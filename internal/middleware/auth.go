@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"auction/internal/models"
+	"auction/internal/pkg"
 	"context"
 	"fmt"
 	"github.com/golang-jwt/jwt/v4"
@@ -17,52 +18,44 @@ func AuthMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			log.Println("No Authorization header")
+			log.Println("no authorization header")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-		if tokenString == authHeader {
-			log.Println("Authorization header valid")
+		if tokenString == "" {
+			log.Println("authorization token is empty")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		claims := &pkg.CustomClaims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
 			return []byte(os.Getenv("JWT_SECRET")), nil
 		})
 
 		if err != nil {
-			log.Printf("ERROR parsing token", err)
+			log.Printf("ERROR parsing token: %v", err)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if !token.Valid {
+			log.Println("Token invalid token")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			log.Printf("ERROR: Expecred MapClaims")
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		userUDFloat, ok := claims["user_id"].(float64)
-		if !ok {
-			log.Printf("ERROR: user_id not found or wrong type")
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		username, _ := claims["username"].(string)
-		email, _ := claims["email"].(string)
-		role, _ := claims["role"].(string)
+		log.Printf("user authenticated - ID: %d, Username: %s, Role: %s",
+			claims.UserID, claims.Username, claims.Role)
 
 		user := &models.User{
-			ID:       int(userUDFloat),
-			Username: username,
-			Email:    email,
-			Role:     role,
+			ID:       claims.UserID,
+			Username: claims.Username,
+			Email:    claims.Email,
+			Role:     claims.Role,
 		}
 
 		ctx := context.WithValue(r.Context(), UserKey, user)

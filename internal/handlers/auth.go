@@ -3,6 +3,7 @@ package handlers
 import (
 	"auction/internal/models"
 	"auction/internal/pkg"
+	"auction/internal/utils"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,25 +16,38 @@ type AuthHandler struct {
 }
 
 func NewAuthHandler(db *sql.DB) *AuthHandler {
-	return &AuthHandler{db: db}
+	return &AuthHandler{
+		db: db,
+	}
 }
 
+// @Summary Регистрация нового пользователя
+// @Description Создание нового пользователя
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.SignInRequest true "Данные для регистрации"
+// @Success 201 {object} models.AuthResponse
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/register [post]
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	var req models.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	var existingEmail string
 	err := h.db.QueryRow("SELECT email FROM users WHERE email = $1", req.Email).Scan(&existingEmail)
 	if err != sql.ErrNoRows {
-		http.Error(w, "Email already exists", http.StatusConflict)
+		http.Error(w, "email already exists", http.StatusConflict)
 		return
 	}
 
-	hashedPassword, err := pkg.HashPassword(req.Password)
+	hashedPassword, err := utils.HashPassword(req.Password)
 	if err != nil {
 		http.Error(w, "failed to process password", http.StatusInternalServerError)
 		return
@@ -47,7 +61,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		"user").Scan(&userID)
 
 	if err != nil {
-		log.Printf("Database INSERT error: %v", err)
+		log.Printf("database INSERT error: %v", err)
 		http.Error(w, "error", http.StatusInternalServerError)
 		return
 	}
@@ -69,7 +83,6 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -79,6 +92,17 @@ type LoginRequest struct {
 	Password string `json:"password" validate:"required"`
 }
 
+// @Summary Авторизация пользователя
+// @Description Авторизует пользователя и возвращает токены
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body models.SignInRequest true "Данные для авторизации"
+// @Success 200 {object} models.AuthResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/login [post]
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	var req LoginRequest
@@ -100,8 +124,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		&hashedPassword,
 		&user.Role)
 
-	if !pkg.CheckPasswordHash(req.Password, hashedPassword) {
-		log.Printf("Password mismatch for user: %v", err)
+	if !utils.CheckPasswordHash(req.Password, hashedPassword) {
+		log.Printf("password mismatch for user: %v", err)
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -147,7 +171,7 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		&user.Role)
 
 	if err != nil {
-		log.Printf("Database INSERT error: %v", err)
+		log.Printf("database INSERT error: %v", err)
 		http.Error(w, "error", http.StatusInternalServerError)
 		return
 	}

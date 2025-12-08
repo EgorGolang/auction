@@ -53,7 +53,7 @@ func (r *PostgresLotRepository) CreateLot(ctx context.Context, lot models.LotCre
 
 func (r *PostgresLotRepository) GetLots(ctx context.Context) ([]models.LotResponse, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, title, description, start_price, current_price, end_time, 
-       created_at FROM lots WHERE status = 'active' ORDER BY created_at DESC`)
+       created_at, user_id FROM lots WHERE status = 'active' ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,8 @@ func (r *PostgresLotRepository) GetLots(ctx context.Context) ([]models.LotRespon
 			&lot.StartPrice,
 			&lot.CurrentPrice,
 			&lot.EndTime,
-			&lot.CreatedAt)
+			&lot.CreatedAt,
+			&lot.UserID)
 		if err != nil {
 			return nil, err
 		}
@@ -93,12 +94,13 @@ func (r *PostgresLotRepository) GetLotByID(ctx context.Context, id int) (*models
 		&lot.StartPrice,
 		&lot.CurrentPrice,
 		&lot.EndTime)
+	if err == sql.ErrNoRows {
+		return nil, errs.ErrFoundLot
+	}
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, err
-		}
 		return nil, err
 	}
+
 	return lot, nil
 }
 

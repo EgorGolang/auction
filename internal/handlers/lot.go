@@ -1,63 +1,67 @@
 package handlers
 
 import (
+	"auction/internal/errs"
 	"auction/internal/middleware"
 	"auction/internal/models"
+	"auction/internal/service"
 	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
-	"time"
 )
 
 type LotHandler struct {
-	db *sql.DB
+	db         *sql.DB
+	lotService *service.LotService
 }
 
-func NewLotHandler(db *sql.DB) *LotHandler {
-	return &LotHandler{db: db}
+func NewLotHandler(db *sql.DB, lotService *service.LotService) *LotHandler {
+	return &LotHandler{
+		db:         db,
+		lotService: lotService}
 }
 
+// @Summary Получение списка лотов
+// @Description Возвращает список активных лотов
+// @Tags lots
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/lots [get]
 func (h *LotHandler) GetLots(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.Query(`
-		SELECT id, title, description, start_price, current_price, end_time, created_at
-		FROM lots 
-		WHERE status = 'active' 
-		ORDER BY created_at DESC
-	`)
+	lots, err := h.lotService.GetLots(r.Context())
 	if err != nil {
-		http.Error(w, "error", http.StatusInternalServerError)
+		log.Println("getLots: ", err)
 		return
 	}
-	defer rows.Close()
-
-	var lots []models.Lot
-	for rows.Next() {
-		var lot models.Lot
-		err := rows.Scan(&lot.ID, &lot.Title, &lot.Description, &lot.StartPrice,
-			&lot.CurrentPrice, &lot.EndTime, &lot.CreatedAt)
-		if err != nil {
-			http.Error(w, "lot search error", http.StatusInternalServerError)
-			return
-		}
-		lots = append(lots, lot)
+	if lots == nil {
+		lots = []models.LotResponse{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(lots)
 }
 
+// @Summary Создание нового лота
+// @Description Создает новый лот на аукционе
+// @Tags lots
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body models.Lot true "Данные лота"
+// @Success 201 {object} models.CreateLotResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 403 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /auth/lots/create [post]
 func (h *LotHandler) CreateLot(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUserFromContext(r.Context())
 	if user == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	role, err := h.checkUserRole(user.ID)
-	if role != "user" {
-		http.Error(w, "no access", http.StatusUnauthorized)
 		return
 	}
 
@@ -67,24 +71,23 @@ func (h *LotHandler) CreateLot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//"2024-06-15T14:30:00+03:00"
-	endTime, err := time.Parse(time.RFC3339, lot.EndTime)
+	lotID, err := h.lotService.CreateLot(r.Context(), user.ID, lot)
 	if err != nil {
-		http.Error(w, "Invalid time format", http.StatusBadRequest)
-		return
-	}
-
-	var lotID int
-	createdAt := time.Now()
-	err = h.db.QueryRow(
-		`INSERT INTO lots (title, description, start_price, current_price, end_time, user_id, created_at) 
-		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-		lot.Title, lot.Description, lot.StartPrice, lot.StartPrice, endTime, user.ID, createdAt,
-	).Scan(&lotID)
-
-	if err != nil {
-		log.Printf("Error inserting new lot: %v", err)
-		http.Error(w, "error creating lot", http.StatusInternalServerError)
+		switch err {
+		case errs.ErrNoAccess:
+			http.Error(w, "access denied", http.StatusUnauthorized)
+		case errs.ErrInvalidTimeFormat:
+			http.Error(w, "invalid time format", http.StatusBadRequest)
+		case errs.ErrInvalidTitle:
+			http.Error(w, "invalid title", http.StatusBadRequest)
+		case errs.ErrInvalidDescription:
+			http.Error(w, "invalid description", http.StatusBadRequest)
+		case errs.ErrInvalidPrice:
+			http.Error(w, "invalid price", http.StatusBadRequest)
+		default:
+			log.Printf("error creating lot: %v", err)
+			http.Error(w, "error creating lot", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -95,57 +98,94 @@ func (h *LotHandler) CreateLot(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *LotHandler) GetLot(w http.ResponseWriter, r *http.Request) {
+// @Summary Получение лота по ID
+// @Description Возвращает информацию о конкретном лоте по его ID
+// @Tags lots
+// @Accept json
+// @Produce json
+// @Param id query int true "ID лота" minimum(1)
+// @Success 200 {object} models.LotResponse "Информация о лоте"
+// @Failure 400 {object} models.ErrorResponse "Неверный ID"
+// @Failure 404 {object} models.ErrorResponse "Лот не найден"
+// @Failure 500 {object} models.ErrorResponse "Внутренняя ошибка сервера"
+// @Router /api/lot [get]
+func (h *LotHandler) GetLotByID(w http.ResponseWriter, r *http.Request) {
 	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		http.Error(w, "no id provided", http.StatusBadRequest)
+		return
+	}
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid lot ID", http.StatusBadRequest)
+	if err != nil || id < 1 {
+		http.Error(w, "invalid lot ID", http.StatusBadRequest)
 		return
 	}
-
-	var lot models.Lot
-
-	err = h.db.QueryRow(`
-		SELECT id, title, description, start_price, current_price, end_time, created_at 
-		FROM lots WHERE id = $1
-	`, id).Scan(&lot.ID, &lot.Title, &lot.Description, &lot.StartPrice,
-		&lot.CurrentPrice, &lot.EndTime, &lot.CreatedAt)
-
+	lot, err := h.lotService.GetLotByID(r.Context(), id)
 	if err != nil {
-		http.Error(w, "lot not found", http.StatusNotFound)
+		switch err {
+		case errs.ErrFoundLot:
+			http.Error(w, "lot not found", http.StatusNotFound)
+		case errs.ErrInvalidLotID:
+			http.Error(w, "invalid lot ID", http.StatusBadRequest)
+		default:
+			log.Printf("error getting lot: %v", err)
+			http.Error(w, "error getting lot", http.StatusInternalServerError)
+		}
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(lot)
 }
 
+// @Summary Удаление лота
+// @Description Удаляет лот по ID (только для администраторов)
+// @Tags lots
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id query int true "ID лота для удаления" minimum(1)
+// @Success 204 "Лот успешно удален"
+// @Failure 400 {object} models.ErrorResponse "Неверный ID или отсутствует ID"
+// @Failure 401 {object} models.ErrorResponse "Не авторизован"
+// @Failure 403 {object} models.ErrorResponse "Доступ запрещен (не администратор)"
+// @Failure 404 {object} models.ErrorResponse "Лот не найден"
+// @Failure 500 {object} models.ErrorResponse "Внутренняя ошибка сервера"
+// @Router /auth/lot/delete [delete]
 func (h *LotHandler) DeleteLot(w http.ResponseWriter, r *http.Request) {
 	user := middleware.GetUserFromContext(r.Context())
-	if user == nil || user.Role != "admin" {
+	if user == nil {
+		log.Println("deleteLot: user is nil")
 		http.Error(w, "admin access required", http.StatusUnauthorized)
 		return
 	}
-	idStr := r.URL.Query().Get("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid lot ID", http.StatusBadRequest)
-		return
-	}
-	_, err = h.db.Exec(`DELETE FROM lots WHERE id = $1`, id)
-	if err != nil {
-		http.Error(w, "error deleting lot", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNoContent)
-}
 
-func (h *LotHandler) checkUserRole(userID int) (string, error) {
-	var role string
-	err := h.db.QueryRow("SELECT role FROM users WHERE id = $1", userID).Scan(&role)
-	if err != nil {
-		return "", err
+	if user.Role != "admin" {
+		log.Printf("deleteLot: access denied. Role '%s' != 'admin'", user.Role)
+		http.Error(w, "admin access required", http.StatusUnauthorized)
+		return
 	}
-	return role, nil
+
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		http.Error(w, "lot ID is required", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id < 1 {
+		http.Error(w, "invalid lot ID", http.StatusBadRequest)
+		return
+	}
+	err = h.lotService.DeleteLot(r.Context(), id, user.ID)
+	if err != nil {
+		switch err {
+		case errs.ErrAdminAccessDenied:
+			http.Error(w, "access denied", http.StatusForbidden)
+		case errs.ErrFoundLot:
+			http.Error(w, "lot not found", http.StatusNotFound)
+		default:
+			log.Printf("error deleting lot: %v", err)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
