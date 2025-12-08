@@ -19,7 +19,6 @@ type CreateLotRequest struct {
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	StartPrice  int       `json:"start_price"`
-	Step        int       `json:"step"`
 	EndTime     time.Time `json:"end_time"`
 }
 
